@@ -1106,6 +1106,46 @@ class StripeAccount(StripeObject):
 
         return cls._get_or_create_from_stripe_object(account_data)[0]
 
+    def purge(self):
+        """
+        Delete all identifying information we have in this record
+        """
+        self.account_fingerprint = ""
+        self.account_last_4 = ""
+        self.account_bank = ""
+        self.account_location = ""
+        self.account_routing_num = ""
+
+    def sync(self, cu=None):
+        stripe_account = cu or self.stripe_account
+        if getattr(stripe_account, 'deleted', False):
+            # account was deleted from stripe
+            self.purge()
+        elif getattr(stripe_account, 'active_account', None):
+            self.account_fingerprint = (stripe_account.external_account.data)[0].fingerprint
+            self.account_last_4 = (stripe_account.external_account.data)[0].last4
+            self.account_bank = (stripe_account.external_account.data)[0].bank_name
+            self.account_location = (stripe_account.external_account.data)[0].country
+            self.account_routing_num = (stripe_account.external_account.data)[0].routing_number
+
+    def transfer(self, amount, currency="sgd", description=None, send_receipt=True, **kwargs):
+        """
+        This method expects `amount` to be a Decimal type representing a
+        dollar amount. It will be converted to cents so any decimals beyond
+        two will be ignored.
+        """
+        if not isinstance(amount, decimal.Decimal):
+            raise ValueError(
+                "You must supply a decimal value representing dollars."
+            )
+        resp = StripeTransfer.api_create(
+            amount=int(amount * 100),  # Convert dollars into cents
+            currency=currency,
+            destination=self.stripe_id,
+            description=description,
+            **kwargs
+        )
+        return resp["id"]
 
 # ============================================================================ #
 #                               Payment Methods                                #

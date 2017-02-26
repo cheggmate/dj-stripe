@@ -553,8 +553,218 @@ class Transfer(StripeTransfer):
 # ============================================================================ #
 
 class Account(StripeAccount):
-    pass
+    # Tying the account_holder field to users.User directly
+    # issue with importing django.conf.settings (see top of file)
+    # account_holder = models.OneToOneField(User, null=True)
+    account_holder = models.OneToOneField(djstripe_settings.get_account_holder_model_string(), null=True,
+                               on_delete=SET_NULL)
+    date_purged = models.DateTimeField(null=True, editable=False)
 
+    __doc__ = getattr(StripeAccount, "__doc__") + doc
+
+    objects = AccountManager()
+
+    def purge(self):
+        try:
+            self.stripe_account.delete()
+        except stripe.InvalidRequestError as exc:
+            if str(exc).startswith("No such account:"):
+                # The exception was thrown because the stripe customer was already
+                # deleted on the stripe side, ignore the exception
+                pass
+            else:
+                # The exception was raised for another reason, re-raise it
+                raise
+        self.account_holder = None
+        super(Account, self).purge()
+        self.date_purged = timezone.now()
+        self.save()
+
+    def str_parts(self):
+        return [
+            smart_text(self.account_holder),
+            "email={email}".format(email=self.account_holder.email),
+        ] + super(Account, self).str_parts()
+
+    def delete(self, using=None):
+        # Only way to delete a customer is to use SQL
+        self.purge()
+
+    @classmethod
+    def get_or_create(cls, account_holder, request=None):
+        try:
+            return Account.objects.get(account_holder=account_holder), False
+        except Account.DoesNotExist:
+            return cls.create(account_holder, request), True
+
+    @classmethod
+    def create(cls, account_holder, data):
+        stripe_account = cls.api_create(email=account_holder.email,
+                                        managed=True,
+                                        country=data.get('country', 'US'),
+                                        external_account=data.get('external_account'))
+        if type(stripe_account) == 'str':
+            stripe_account = json.loads(stripe_account)
+        external_account_details = stripe_account.pop('external_accounts', '')
+        external_account_data = external_account_details.pop('data', "")
+        if type(external_account_data[0]) == 'str':
+            external_account = json.loads(external_account_data[0])
+        else:
+            external_account = external_account_data[0]
+        account_fingerprint = external_account.pop('fingerprint', '')
+        account_last_4 = external_account.pop('last4', '')
+        account_bank = external_account.pop('bank_name', '')
+        account_location = external_account.pop('country', '')
+        account_routing_num = external_account.pop('routing_number', '')
+
+        # process data here
+        account_holder = Account.objects.create(account_holder=account_holder,
+                                                stripe_id=stripe_account.id,
+                                                account_fingerprint=account_fingerprint,
+                                                account_last_4=account_last_4,
+                                                account_bank=account_bank,
+                                                account_location=account_location)
+        return account_holder
+
+    @classmethod
+    def update_fields(cls, user, local_account, request):
+        save_successful = False
+        account = cls.api_retrieve(local_account)
+        # split keys into buckets for easier treatment
+        list = ['external_account']
+        legal_entity = ['address_line1', 'address_postal_code', 'dob_day',
+                        'dob_month', 'dob_year', 'first_name', 'last_name',
+                        'personal_id_number', 'type', 'verification_document']
+        tos_acceptance = ['ip']
+
+        for key, value in (request.data).iteritems():
+            if key in list:
+                setattr(account, str(key), value)
+            elif key in legal_entity:
+                if 'address' in key:
+                    setattr(account.legal_entity.address, str(key[8:]), value)
+                elif 'dob' in key:
+                    setattr(account.legal_entity.dob, str(key[4:]), value)
+                else:
+                    setattr(account.legal_entity, str(key), value)
+            elif key in tos_acceptance:
+                setattr(account.tos_acceptance, str(key), value)
+            elif key == 'date':
+                unix_timestamp = ((datetime.datetime.strptime(
+                                    value, "%Y-%m-%dT%H:%M:%S.%fZ"
+                                  ) -
+                                  datetime.datetime(1970, 1, 1))
+                                  .total_seconds())
+                setattr(account.tos_acceptance, str(key), int(unix_timestamp))
+            elif key == "verification_file":
+                doc_id = local_account.send_verification_file(
+                                                 value,
+                                                 local_account,
+                                                 request.data['first_name'],
+                                                 request.data['last_name'])
+                setattr(account.legal_entity.verification, 'document', str(doc_id))
+
+        try:
+            account.save()
+            save_successful = True
+            cls.sync_account(local_account)
+        except:
+            pass
+
+        return save_successful
+
+    @classmethod
+    def send_verification_file(cls, file, local_account, first_name, last_name):
+        file_path = AccountVerification.objects.create(account=local_account,
+                                                       image=file,
+                                                       first_name=first_name,
+                                                       last_name=last_name)
+        file_path = settings.MEDIA_ROOT + "/" + file_path.image.name
+        with open(file_path, "r") as fp:
+            response = stripe.FileUpload.create(
+                    purpose="identity_document",
+                    file=fp,
+                    stripe_account=str(local_account.stripe_id),
+                    )
+        return response.id
+        # combined with update account method in 'update_fields'
+        # account = cls.api_retrieve(local_account['id'])
+        # account.legal_entity.verification.document = response['id']
+        # account.save()
+
+    def retry_unpaid_invoices(self):
+        self.sync_invoices()
+        for inv in self.invoices.filter(paid=False, closed=False):
+            try:
+                inv.retry()  # Always retry unpaid invoices
+            except stripe.InvalidRequestError as exc:
+                if str(exc) != "Invoice is already paid":
+                    raise exc
+
+    def send_invoice(self):
+        try:
+            invoice = Invoice.api_create(customer=self.stripe_id)
+            invoice.pay()
+            return True
+        except stripe.InvalidRequestError:
+            return False  # There was nothing to invoice
+
+    # TODO refactor, deprecation on cu parameter -> stripe_customer
+    def sync(self, cu=None):
+        super(Account, self).sync(cu)
+        self.save()
+
+    # # TODO refactor, deprecation on cu parameter -> stripe_customer
+    def sync_invoices(self, cu=None, **kwargs):
+        stripe_customer = cu or self.stripe_customer
+        for invoice in stripe_customer.invoices(**kwargs).data:
+            Invoice.sync_from_stripe_data(invoice, send_receipt=False)
+
+    def transfer(self, amount, currency='sgd', description=None, send_receipt=None, **kwargs):
+        # TODO: Find a way to check for send receipt
+        if send_receipt is None:
+            send_receipt = getattr(settings, 'DJSTRIPE_SEND_INVOICE_RECEIPT_EMAILS', True)
+        transfer_id = super(Account, self).transfer(amount, currency, description, send_receipt, **kwargs)
+        recorded_transfer = self.record_transfer(transfer_id)
+        if send_receipt:
+            recorded_transfer.send_receipt()
+        return recorded_transfer
+
+    def can_transfer(self):
+        return self.date_purged is None
+
+    def record_transfer(self, transfer_id):
+        data = Transfer.api().retrieve(transfer_id)  # equi: data = Transfer.api().retrieve(charge_id)
+        return Transfer.sync_from_stripe_data(data)  # equi: Transfer.sync_from_stripe_data(data)
+
+    def update_account(self, token):
+        # send new token to Stripe
+        stripe_account = self.stripe_account
+        stripe_account.external_account = token
+        stripe_account.save()
+
+        # # Download new card details from Stripe
+        # self.sync_account(stripe_account)
+        # self.save()
+        # account_changed.send(sender=self, stripe_response=stripe_account)  # check what this signal does
+
+    @classmethod
+    def sync_account(cls, stripe_account):
+        account = (cls.api_retrieve(stripe_account)['external_accounts']['data'])[0]
+        loc_acct = Account.objects.get(pk=stripe_account.id)
+        loc_acct.account_fingerprint = account['fingerprint']
+        loc_acct.account_last_4 = account['last4']
+        loc_acct.account_bank = account['bank_name']
+        loc_acct.account_location = account['country']
+        loc_acct.account_routing_num = account['routing_number']
+        loc_acct.save()
+
+
+class AccountVerification(TimeStampedModel):
+    account = models.ForeignKey(Account, related_name='account_image', null=False)
+    image = models.ImageField(null=False, upload_to='stripe_verification_images')
+    first_name = models.CharField(max_length=20, null=False)
+    last_name = models.CharField(max_length=20, null=False)
 
 # ============================================================================ #
 #                               Payment Methods                                #
