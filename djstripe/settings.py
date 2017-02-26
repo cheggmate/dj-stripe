@@ -128,3 +128,46 @@ def get_subscriber_model():
                 "if a DJSTRIPE_SUBSCRIBER_MODEL is defined.")
 
     return subscriber_model
+
+
+def get_account_holder_model_string():
+    """Get the configured subscriber model as a module path string."""
+    return getattr(settings, "DJSTRIPE_ACCOUNT_HOLDER_MODEL", settings.AUTH_USER_MODEL)
+
+
+def get_account_holder_model():
+    """
+    Attempt to pull settings.DJSTRIPE_ACCOUNT_HOLDER_MODEL.
+
+    Users have the option of specifying a custom account holder model via the
+    DJSTRIPE_ACCOUNT_HOLDER_MODEL setting.
+
+    This methods falls back to AUTH_USER_MODEL if
+    DJSTRIPE_ACCOUNT_HOLDER_MODEL is not set.
+
+    Returns the account holder model that is active in this project.
+    """
+    model_name = get_account_holder_model_string()
+
+    # Attempt a Django 1.7 app lookup
+    try:
+        account_holder_model = django_apps.get_model(model_name)
+    except ValueError:
+        raise ImproperlyConfigured("DJSTRIPE_ACCOUNT_HOLDER_MODEL must be of the form 'app_label.model_name'.")
+    except LookupError:
+        raise ImproperlyConfigured("DJSTRIPE_ACCOUNT_HOLDER_MODEL refers to model '{model}' "
+                                   "that has not been installed.".format(model=model_name))
+
+    if (("email" not in [field_.name for field_ in account_holder_model._meta.get_fields()]) and
+            not hasattr(subscriber_model, 'email')):
+        raise ImproperlyConfigured("DJSTRIPE_ACCOUNT_HOLDER_MODEL must have an email attribute.")
+
+    if model_name != settings.AUTH_USER_MODEL:
+        # Custom user model detected. Make sure the callback is configured.
+        func = get_callback_function("DJSTRIPE_ACCOUNT_HOLDER_MODEL_REQUEST_CALLBACK")
+        if not func:
+            raise ImproperlyConfigured(
+                "DJSTRIPE_ACCOUNT_HOLDER_MODEL_REQUEST_CALLBACK must be implemented "
+                "if a DJSTRIPE_ACCOUNT_HOLDER_MODEL is defined.")
+
+    return account_holder_model
