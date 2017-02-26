@@ -54,6 +54,9 @@ def get_callback_function(setting_name, default=None):
 subscriber_request_callback = get_callback_function("DJSTRIPE_SUBSCRIBER_MODEL_REQUEST_CALLBACK",
                                                     default=(lambda request: request.user))
 
+account_holder_request_callback = get_callback_function("DJSTRIPE_ACCOUNT_HOLDER_MODEL_REQUEST_CALLBACK",
+                                                    default=(lambda request: request.user))
+
 INVOICE_FROM_EMAIL = getattr(settings, "DJSTRIPE_INVOICE_FROM_EMAIL", "billing@example.com")
 PAYMENTS_PLANS = getattr(settings, "DJSTRIPE_PLANS", {})
 PLAN_HIERARCHY = getattr(settings, "DJSTRIPE_PLAN_HIERARCHY", {})
