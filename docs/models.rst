@@ -13,6 +13,25 @@ in the docstring for each model.
     with the actual class name.
 
 
+Account
+-------
+.. autoclass:: djstripe.models.Account
+
+    .. automethod:: djstripe.stripe_objects.StripeObject.api_list
+    .. automethod:: djstripe.models.Account.api_retrieve
+    
+    .. automethod:: djstripe.models.Account.get_or_create
+    .. automethod:: djstripe.models.Account.purge
+    .. automethod:: djstripe.models.Account.update_fields
+    .. automethod:: djstripe.models.Account.send_verification_file
+    .. automethod:: djstripe.models.Account.sync_account
+    .. automethod:: djstripe.models.Account.update_account
+
+    .. automethod:: djstripe.models.Account.can_transfer
+
+    .. automethod:: djstripe.stripe_objects.StripeObject.sync_from_stripe_data
+
+
 Charge
 ------
 .. autoclass:: djstripe.models.Charge
