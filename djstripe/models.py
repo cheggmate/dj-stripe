@@ -36,7 +36,7 @@ import traceback as exception_traceback
 from . import settings as djstripe_settings
 from . import webhooks
 from .exceptions import MultipleSubscriptionException
-from .managers import SubscriptionManager, ChargeManager, TransferManager
+from .managers import AccountManager, SubscriptionManager, ChargeManager, TransferManager
 from .signals import WEBHOOK_SIGNALS
 from .signals import webhook_processing_error
 from .stripe_objects import (StripeSource, StripeCharge, StripeCustomer, StripeCard, StripeSubscription,
@@ -560,7 +560,7 @@ class Account(StripeAccount):
                                on_delete=SET_NULL)
     date_purged = models.DateTimeField(null=True, editable=False)
 
-    __doc__ = getattr(StripeAccount, "__doc__") + doc
+    __doc__ = getattr(StripeAccount, "__doc__")
 
     objects = AccountManager()
 
@@ -760,11 +760,13 @@ class Account(StripeAccount):
         loc_acct.save()
 
 
-class AccountVerification(TimeStampedModel):
-    account = models.ForeignKey(Account, related_name='account_image', null=False)
-    image = models.ImageField(null=False, upload_to='stripe_verification_images')
-    first_name = models.CharField(max_length=20, null=False)
-    last_name = models.CharField(max_length=20, null=False)
+# class AccountVerification(TimeStampedModel):
+#     __doc__ = getattr(StripeAccountVerification, "__doc__")
+
+#     account = models.ForeignKey(Account, related_name='account_image', null=False)
+#     image = models.ImageField(null=False, upload_to='stripe_verification_images')
+#     first_name = models.CharField(max_length=20, null=False)
+#     last_name = models.CharField(max_length=20, null=False)
 
 # ============================================================================ #
 #                               Payment Methods                                #

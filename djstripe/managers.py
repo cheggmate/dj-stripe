@@ -36,6 +36,19 @@ class StripeObjectManager(models.Manager):
         return self.get(stripe_id=data[field_name])
 
 
+class AccountManager(models.Manager):
+
+    # def active(self):
+    #     return self.filter(
+    #         current_subscription__status=enums.SubscriptionStatus.ACTIVE
+    #     )
+
+    def churn(self):
+        canceled = self.canceled().count()
+        active = self.active().count()
+        return decimal.Decimal(str(canceled)) / decimal.Decimal(str(active))
+
+
 class SubscriptionManager(models.Manager):
     """Manager used in models.Subscription."""
 
